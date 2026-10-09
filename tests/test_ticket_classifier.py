@@ -213,6 +213,126 @@ def test_classify_severity_catches_broken_and_access_problems():
             raise AssertionError(f"Unexpected error for {ticket!r}: {e}")
 
 
+def test_classify_severity_returns_label_and_confidence_tuple():
+    result = classify_severity("Getting an error when saving")
+    assert isinstance(result, tuple) and len(result) == 2
+    label, confidence = result
+    assert label == "medium"
+    assert isinstance(confidence, float)
+
+
+def test_classify_severity_confidence_is_between_zero_and_one():
+    tickets = [
+        "",
+        None,
+        "Thanks for the help yesterday",
+        "Getting an error when saving",
+        "The website is down",
+        # stacks every bonus
+        "URGENT critical outage: production is down, data loss, 5000 users affected, everyone hacked",
+        # stacks every penalty
+        "Maybe something weird, not sure, might possibly be odd, seems strange, perhaps a bug?",
+    ]
+    for ticket in tickets:
+        label, confidence = classify_severity(ticket)
+        assert label in ("low", "medium", "high")
+        assert isinstance(confidence, float)
+        assert 0.0 <= confidence <= 1.0, f"Out of range for {ticket!r}: {confidence}"
+
+
+def test_classify_severity_clearly_severe_ticket_has_high_confidence():
+    tickets = [
+        "production database is down, 500 users affected",
+        "URGENT: full outage in production, all users affected",
+        "Critical security breach, customer data compromised",
+    ]
+    for ticket in tickets:
+        label, confidence = classify_severity(ticket)
+        assert label == "high", f"Expected 'high' for {ticket!r}, got {label!r}"
+        assert confidence >= 0.8, f"Expected >= 0.8 for {ticket!r}, got {confidence}"
+
+
+def test_classify_severity_ambiguous_ticket_has_low_confidence():
+    tickets = [
+        "Something happened with my account",
+        "Not sure if this is urgent, the site might be slow?",
+        "Maybe a bug, something looks weird",
+        "Is this an outage?",
+        "The outage is resolved, thanks",
+        "How do I export a list of all users?",
+    ]
+    for ticket in tickets:
+        _, confidence = classify_severity(ticket)
+        assert confidence < 0.6, f"Expected < 0.6 for {ticket!r}, got {confidence}"
+
+
+def test_classify_severity_plain_tickets_are_confident_enough_to_route():
+    tickets = [
+        "The website is down",
+        "Getting an error when saving",
+        "Can you add a dark mode?",
+        "Please update my billing address",
+    ]
+    for ticket in tickets:
+        _, confidence = classify_severity(ticket)
+        assert confidence >= 0.6, f"Expected >= 0.6 for {ticket!r}, got {confidence}"
+
+
+def test_classify_severity_empty_input_has_zero_confidence():
+    for value in ("", None):
+        assert classify_severity(value) == ("low", 0.0)
+
+
+def test_classify_severity_more_evidence_means_more_confidence():
+    _, one_signal = classify_severity("The website is down")
+    _, two_signals = classify_severity("Urgent: the website is down")
+    _, with_impact = classify_severity("Urgent: the website is down for 2,000 customers")
+    assert one_signal < two_signals < with_impact
+
+
+def test_classify_severity_false_statements_are_not_flagged():
+    # The ticket says the problem is NOT happening, so it must not be raised.
+    tickets = [
+        "The site is not down",
+        "This is not critical",
+        "Not really urgent, just checking in",
+        "A non-critical question about exports",
+        "There was no data loss",
+        "No outages on our side",
+        "It isn't a bug",
+        "No errors, the export went fine",
+        "This was never an incident",
+    ]
+    for ticket in tickets:
+        label, _ = classify_severity(ticket)
+        assert label == "low", f"Expected 'low' for {ticket!r}, got {label!r}"
+
+
+def test_classify_severity_negation_does_not_hide_a_real_problem():
+    # A negated keyword must not cancel a different, un-negated one.
+    assert classify_severity("Not urgent, but the export failed")[0] == "medium"
+    assert classify_severity("No data loss, but the site is down")[0] == "high"
+
+
+def test_classify_severity_plain_numbers_are_not_http_errors():
+    tickets = [
+        "I have 500 invoices to upload",
+        "We added 520 seats this month",
+        "Please raise our limit to 503 contacts",
+    ]
+    for ticket in tickets:
+        label, _ = classify_severity(ticket)
+        assert label == "low", f"Expected 'low' for {ticket!r}, got {label!r}"
+    for ticket in ("Getting a 500 error on the dashboard", "API returns status 503"):
+        label, _ = classify_severity(ticket)
+        assert label == "high", f"Expected 'high' for {ticket!r}, got {label!r}"
+
+
+def test_classify_category_plain_numbers_are_not_bugs():
+    _assert_category(["I need a refund of 500 dollars"], "billing")
+    _assert_category(["Getting a 500 error on the dashboard"], "bug")
+
+
 VALID_CATEGORIES = ("bug", "feature_request", "billing", "access_request", "other")
 
 
